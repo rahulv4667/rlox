@@ -77,7 +77,7 @@ public class Scanner {
                 addToken(match('=')? TokenType.GREATER_EQUAL: TokenType.GREATER);
                 break;
             case '<':
-                addToken(match('-')? TokenType.LESS_EQUAL: TokenType.LESS);
+                addToken(match('=')? TokenType.LESS_EQUAL: TokenType.LESS);
                 break;
 
             case '/':

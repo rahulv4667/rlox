@@ -13,7 +13,7 @@
         {
             "type": "java",
             "name": "Launch Lox",
-            // "args": "test.lox",
+            "args": "test.lox",
             "request": "launch",
             "mainClass": "rlox.Lox",
             "projectName": "rlox_ca9ca12f"
