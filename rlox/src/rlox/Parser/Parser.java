@@ -12,9 +12,10 @@ import rlox.Scanner.*;
 /////////////////////////////////////////////////////////////////////////
 //                                                                     //
 //    program        → declaration* EOF ;                              //
-//    declaration    → funDecl | varDecl | statement ;                 //
+//    declaration    → classDecl | funDecl | varDecl | statement ;     //
 //    varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;      //
 //    funDecl        → "fun" function ;                                //
+//    classDecl      → "class" IDENTIFIER "{" function* "}" ;          //
 //    function       → IDENTIFIER "(" parameters? ")" block ;          //
 //    parameters     → IDENTIFIER ( "," IDENTIFIER )* ;                //
 //    statement      → exprStmt | ifStmt | whileStmt | returnStmt      //

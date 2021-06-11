@@ -53,7 +53,13 @@ public class Lox {
         // Stop if there was a syntax error
         if(hadError) return;
 
+        // Resolving variables
+        Resolver resolver = new Resolver(interpreter);
+        resolver.resolve(statements);
         
+        // Stop if there was a resolution error
+        if(hadError) return;
+
         interpreter.interpret(statements);
 
         // System.out.println(new AstPrinter().print(expression));
@@ -92,16 +98,5 @@ public class Lox {
             runPrompt();
         }
 
-
-        // Expr expression = new Expr.Binary(
-        //     new Expr.Unary(
-        //         new Token(TokenType.MINUS, "-", null, 1),
-        //         new Expr.Literal(123)
-        //     ),
-        //     new Token(TokenType.STAR, "*", null, 1),
-        //     new Expr.Grouping(new Expr.Literal(45.67))
-        // );
-
-        // System.out.println(new AstPrinter().print(expression));
     }
 }

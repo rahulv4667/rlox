@@ -12,7 +12,9 @@ import rlox.Parser.Stmt.Print;
 import rlox.Parser.Stmt.Var;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import rlox.Lox;
 
@@ -22,6 +24,10 @@ public class Interpreter implements
 
     final Environment globals =  new Environment();
     private Environment environment = globals;
+
+    // maintains which the distance between current scope
+    // and the scope that has the variable's resolved value.
+    private final Map<Expr, Integer> locals = new HashMap<>();
 
     public Interpreter() {
         globals.define("clock", new LoxCallable(){
@@ -67,6 +73,19 @@ public class Interpreter implements
         }
     }
 
+    public void resolve(Expr expr, int depth) {
+        locals.put(expr, depth);
+    }
+
+    // resolution of variables at runtime
+    private Object lookUpVariable(Token name, Expr expr) {
+        Integer distance = locals.get(expr);
+        if(distance != null) {
+            return environment.getAt(distance, name.lexeme);
+        } else {
+            return globals.get(name);
+        }
+    }
 
     @Override
     public Object visitBinaryExpr(Binary expr) {
@@ -162,13 +181,20 @@ public class Interpreter implements
 
     @Override
     public Object visitVariableExpr(Variable expr) {
-        return environment.get(expr.name);
+        return lookUpVariable(expr.name, expr);
     }
 
     @Override
     public Object visitAssignExpr(Expr.Assign expr) {
         Object value = evaluate(expr.value);
-        environment.assign(expr.name, value);
+        
+        Integer distance = locals.get(expr);
+        if(distance != null) {
+            environment.assignAt(distance, expr.name, value);
+        } else {
+            globals.assign(expr.name, value);
+        }
+
         return value;
     }
 
