@@ -22,3 +22,41 @@ fun makeCounter() {
 var counter = makeCounter();
 counter(); // "1".
 counter(); // "2".
+print "=================================================";
+
+class A {
+  init() {
+    this.a = "this is class a";
+  }
+
+  log() {
+    print "Class A";
+    print this.a;
+  }
+}
+
+class B < A {
+  init() {
+    super.init();
+    this.b = 20;
+  }
+
+  log() {
+    super.log();
+    print "Class B";
+    print this.b;
+  }
+}
+
+class C < B {
+  init() {
+    super.init();
+  }
+  log() {
+    super.log();
+    print "Class C";
+  }
+}
+
+var c = C();
+c.log();
