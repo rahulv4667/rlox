@@ -1,0 +1,16 @@
+{
+    "configurations": [
+        {
+            "includePath": [
+                "${workspaceFolder}/include/**",
+                "/usr/include/**"
+            ],
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerPath": "/usr/bin/gcc",
+            "defines": [
+                "VDEBUG"
+            ]
+        }
+    ],
+    "version": 4
+}

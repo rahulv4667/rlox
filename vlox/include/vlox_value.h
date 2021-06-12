@@ -3,6 +3,8 @@
 
 #include "vlox_common.h"
 
+#define STACK_MAX 256
+
 typedef double Value;
 
 typedef struct {

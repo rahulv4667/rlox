@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "vlox_common.h": "c",
+        "debug.h": "c"
+    }
+}
