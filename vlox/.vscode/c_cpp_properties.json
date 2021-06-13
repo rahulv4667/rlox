@@ -8,7 +8,8 @@
             "intelliSenseMode": "linux-gcc-x64",
             "compilerPath": "/usr/bin/gcc",
             "defines": [
-                "VDEBUG"
+                "VDEBUG",
+                "VDEBUG_PRINT_CODE"
             ]
         }
     ],

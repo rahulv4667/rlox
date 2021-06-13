@@ -10,7 +10,7 @@ project "vlox"
     files { "**.h", "**.c", "**/**/*.h", "**/**/*.c" }
 
     filter "configurations:Debug"
-        defines { "VDEBUG" }
+        defines { "VDEBUG", "VDEBUG_PRINT_CODE" }
         symbols "On"
 
     filter "configurations:Release"

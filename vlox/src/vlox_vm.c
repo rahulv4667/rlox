@@ -2,6 +2,7 @@
 #include "vlox_common.h"
 #include "vlox_vm.h"
 #include "vlox_value.h"
+#include "vlox_compiler.h"
 
 #ifdef VDEBUG
     #include "vlox_debug.h"
@@ -86,8 +87,20 @@ static InterpretResult run() {
     #undef READ_CONSTANT
 }
 
-InterpretResult interpret(Chunk* chunk) {
-    vm.chunk = chunk;
+InterpretResult interpret(const char* source) {
+
+    Chunk chunk;
+    initChunk(&chunk);
+
+    if(!compile(source, &chunk)) {
+        freeChunk(&chunk);
+        return INTERPRET_COMPILE_ERROR;
+    }
+
+    vm.chunk = &chunk;
     vm.ip = vm.chunk->code;
-    return run();
+
+    InterpretResult result = run();
+    freeChunk(&chunk);
+    return result;   
 }
