@@ -4,6 +4,7 @@
 #include "vlox_chunk.h"
 #include "vlox_value.h"
 #include "vlox_object.h"
+#include "vlox_table.h"
 
 typedef struct {
     Chunk* chunk;
@@ -11,6 +12,7 @@ typedef struct {
     Value stack[STACK_MAX]; // stack of this stack based VM
     Value* stackTop;    // points to top_index+1. If empty, points to zeroth index.
     Obj* objects;       // pointer to the head of all heap allocated objects linked list
+    Table strings_pool;      // to store all unique strings.
 } VM;
 
 typedef enum {

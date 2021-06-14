@@ -22,9 +22,11 @@ static void resetStack() {
 void initVM() {
     resetStack();
     vm.objects = NULL;
+    initTable(&vm.strings_pool);
 }
 
 void freeVM() {
+    freeTable(&vm.strings_pool);
     freeObjects();
 }
 
