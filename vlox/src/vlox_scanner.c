@@ -133,7 +133,8 @@ static Token number() {
 static TokenType checkKeyword(int start, int length, const char* rest, TokenType type) {
 
     if(scanner.current - scanner.start == start+length 
-        && memcmp(scanner.start + start, rest, length)) {
+        && memcmp(scanner.start + start, rest, length) == 0) {
+            if(type==TOKEN_TRUE) printf("TOKEN_TRUE\n");
             return type;
     }
 
@@ -207,6 +208,8 @@ Token scanToken() {
             return makeToken(match('=') ? TOKEN_LESS_EQUAL : TOKEN_LESS);
         case '>':
             return makeToken(match('=') ? TOKEN_GREATER_EQUAL : TOKEN_GREATER);
+        case '=':
+            return makeToken(match('=') ? TOKEN_EQUAL_EQUAL : TOKEN_EQUAL);
 
         case '"': return string();
     }
