@@ -6,6 +6,7 @@
 #include "vlox_compiler.h"
 #include "vlox_scanner.h"
 #include "vlox_value.h"
+#include "vlox_object.h"
 
 #ifdef VDEBUG_PRINT_CODE
     #include "vlox_debug.h"
@@ -50,8 +51,10 @@ static void parsePrecedence(Precedence precedence);
 static void unary();
 static void binary();
 static void number();
+static void string();
 static void literal();
 static void grouping();
+
 
 
 
@@ -81,7 +84,7 @@ ParseRule rules[] = {
     [TOKEN_LESS]            = {NULL,        binary, PREC_COMPARISON},
     [TOKEN_LESS_EQUAL]      = {NULL,        binary, PREC_COMPARISON},
     [TOKEN_IDENTIFIER]      = {NULL,        NULL,   PREC_NONE},
-    [TOKEN_STRING]          = {NULL,        NULL,   PREC_NONE},
+    [TOKEN_STRING]          = {string,      NULL,   PREC_NONE},
     [TOKEN_NUMBER]          = {number,      NULL,   PREC_NONE},
     [TOKEN_AND]             = {NULL,        NULL,   PREC_NONE},
     [TOKEN_CLASS]           = {NULL,        NULL,   PREC_NONE},
@@ -190,6 +193,12 @@ static void endCompiler() {
 static void number() {
     double value = strtod(parser.previous.start, NULL);
     emitConstant(NUMBER_VAL(value));
+}
+
+static void string() {
+    // +1 to remove leading quotation
+    // -2 is is to remove length calculated for quotation marks
+    emitConstant(OBJ_VAL(copyString(parser.previous.start + 1, parser.previous.length-2)));
 }
 
 static void grouping() {
