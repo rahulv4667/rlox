@@ -13,6 +13,7 @@ typedef struct {
     Value* stackTop;    // points to top_index+1. If empty, points to zeroth index.
     Obj* objects;       // pointer to the head of all heap allocated objects linked list
     Table strings_pool;      // to store all unique strings.
+    Table globals;          // to store all global variables.
 } VM;
 
 typedef enum {
