@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "vlox_chunk.h"
 #include "vlox_common.h"
@@ -41,7 +42,19 @@ typedef struct {
     Precedence precedence;
 } ParseRule;
 
+typedef struct {
+    Token name;
+    int depth;
+} Local;
+
+typedef struct {
+    Local locals[UINT8_COUNT];
+    int local_count;    // number of local variables in the scope.
+    int scope_depth;    // depth of scope.
+} Compiler;
+
 Parser parser;
+Compiler* current_compiler;
 Chunk* compiling_chunk;
 
 static void expression();
@@ -57,15 +70,29 @@ static void grouping(bool can_assign);
 static void synchronize();
 static void statement();
 static void declaration();
+static void beginScope();
+static void endScope();
+static void block();
 static void variable(bool can_assign);
 static void namedVariable(Token name, bool can_assign);
 static void varDeclaration();
 static void printStatement();
+static void whileStatement();
+static void ifStatement();
+static void forStatement();
 static void expressionStatement();
+static void declareVariable();
+static void addLocal(Token name);
+static int resolveLocal(Compiler* compiler, Token* name);
+static bool identifiersEqual(Token* a,Token* b);
 static void defineVariable(uint8_t global);
 static uint8_t parseVariable(const char* message);
 static uint8_t identifierConstant(Token* identifier_name);
-
+static int emitJump(uint8_t instruction);
+static void patchJump(int offset);
+static void emitLoop(int loop_start);
+static void and_(bool can_assign);
+static void or_(bool can_assign);
 
 //  token                   = {fn to compile prefix expr starting with token of this type,
 //                             fn to compile an infix expr whose left operand is followed by
@@ -95,7 +122,7 @@ ParseRule rules[] = {
     [TOKEN_IDENTIFIER]      = {variable,    NULL,   PREC_NONE},
     [TOKEN_STRING]          = {string,      NULL,   PREC_NONE},
     [TOKEN_NUMBER]          = {number,      NULL,   PREC_NONE},
-    [TOKEN_AND]             = {NULL,        NULL,   PREC_NONE},
+    [TOKEN_AND]             = {NULL,        and_,   PREC_AND},
     [TOKEN_CLASS]           = {NULL,        NULL,   PREC_NONE},
     [TOKEN_ELSE]            = {NULL,        NULL,   PREC_NONE},
     [TOKEN_FALSE]           = {literal,     NULL,   PREC_NONE},
@@ -103,7 +130,7 @@ ParseRule rules[] = {
     [TOKEN_FUN]             = {NULL,        NULL,   PREC_NONE},
     [TOKEN_IF]              = {NULL,        NULL,   PREC_NONE},
     [TOKEN_NIL]             = {literal,     NULL,   PREC_NONE},
-    [TOKEN_OR]              = {NULL,        NULL,   PREC_NONE},
+    [TOKEN_OR]              = {NULL,        or_,    PREC_OR},
     [TOKEN_PRINT]           = {NULL,        NULL,   PREC_NONE},
     [TOKEN_RETURN]          = {NULL,        NULL,   PREC_NONE},
     [TOKEN_SUPER]           = {NULL,        NULL,   PREC_NONE},
@@ -120,6 +147,7 @@ static Chunk* currentChunk() {
 }
 
 static void errorAt(Token* token, const char* message) {
+    // printf("========errorAt========\n");
     if(parser.panicMode) return;
     parser.panicMode = true;
     fprintf(stderr, "[Line %d] Error", token->line);
@@ -134,17 +162,27 @@ static void errorAt(Token* token, const char* message) {
 
     fprintf(stderr, ": %s\n", message);
     parser.hadError = true;
+
+#ifdef VDEBUG_PRINT_CODE
+    disassembleChunk(currentChunk(), "ERROR");
+#endif
 }
 
 static void error(const char* message) {
+    // printf("========error========\n");
+
     errorAt(&parser.previous, message);
 }
 
 static void errorAtCurrent(const char* message) {
+    // printf("========errorAtCurrent========\n");
+
     errorAt(&parser.current, message);
 } 
 
 static void advance() {
+    // printf("========advance========\n");
+
     parser.previous = parser.current;
 
     for(;;) {
@@ -155,6 +193,8 @@ static void advance() {
 }
 
 static void consume(TokenType type, const char* message) {
+    // printf("========consume========\n");
+
     if(parser.current.type == type) {
         advance();
         return;
@@ -163,16 +203,22 @@ static void consume(TokenType type, const char* message) {
 }
 
 static bool check(TokenType type) {
+    // printf("========check========\n");
+
     return parser.current.type == type;
 }
 
 static bool match(TokenType type) {
+    // printf("========match========\n");
+
     if(!check(type)) return false;
     advance();
     return true;
 }
 
 static uint8_t makeConstant(Value value) {
+    // printf("========makeConstant========\n");
+
     int constant = addConstant(currentChunk(), value);
     if(constant > UINT8_MAX) {
         error("Too many constants in one chunk.");
@@ -183,23 +229,41 @@ static uint8_t makeConstant(Value value) {
 }
 
 static void emitByte(uint8_t byte) {
+    // printf("========emitByte========\n");
+
     writeChunk(currentChunk(), byte, parser.previous.line);
 }
 
 static void emitBytes(uint8_t byte1, uint8_t byte2) {
+    // printf("========emitBytes========\n");
+
     emitByte(byte1);
     emitByte(byte2);
 }
 
 static void emitReturn() {
+    // printf("========emitReturn========\n");
+
     emitByte(OP_RETURN);
 }
 
 static void emitConstant(Value value) {
+    // printf("========emitConstant========\n");
+
     emitBytes(OP_CONSTANT, makeConstant(value));
 }
 
+static void initCompiler(Compiler* compiler) {
+    // printf("========initCompiler========\n");
+
+    compiler->local_count = 0;
+    compiler->scope_depth = 0;
+    current_compiler = compiler;
+}
+
 static void endCompiler() {
+    // printf("========endCompiler========\n");
+
     emitReturn();
 
 #ifdef VDEBUG_PRINT_CODE
@@ -210,22 +274,30 @@ static void endCompiler() {
 }
 
 static void number(bool can_assign) {
+    // printf("========number========\n");
+
     double value = strtod(parser.previous.start, NULL);
     emitConstant(NUMBER_VAL(value));
 }
 
 static void string(bool can_assign) {
+    // printf("========string========\n");
+
     // +1 to remove leading quotation
     // -2 is is to remove length calculated for quotation marks
     emitConstant(OBJ_VAL(copyString(parser.previous.start + 1, parser.previous.length-2)));
 }
 
 static void grouping(bool can_assign) {
+    // printf("========grouping========\n");
+
     expression();
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
 
 static void unary(bool can_assign) {
+    // printf("========unary========\n");
+
     TokenType operator_type = parser.previous.type;
 
     // Compile the operand
@@ -240,6 +312,8 @@ static void unary(bool can_assign) {
 }
 
 static void binary(bool can_assign) {
+    // printf("========binary========\n");
+
     TokenType operator_type = parser.previous.type;
     ParseRule* rule = getRule(operator_type);
     parsePrecedence((Precedence)(rule->precedence + 1));
@@ -265,6 +339,8 @@ static void binary(bool can_assign) {
 
 
 static void literal(bool can_assign) {
+    // printf("========literal========\n");
+
     switch(parser.previous.type) {
         case TOKEN_FALSE:   emitByte(OP_FALSE); break;
         case TOKEN_TRUE:    emitByte(OP_TRUE); break;
@@ -275,13 +351,19 @@ static void literal(bool can_assign) {
 
 
 static ParseRule* getRule(TokenType type) {
+    // printf("========getRule========\n");
+
     return &rules[type];
 }
 
 static void parsePrecedence(Precedence precedence) {
+    // printf("========parsePrecendence========\n");
+
     advance();
+    
     ParseFn prefix_rule = getRule(parser.previous.type)->prefix;
     if(prefix_rule == NULL) {
+        printf("%s\n", parser.previous.start);
         error("Expect expression.");
         return;
     }
@@ -305,24 +387,241 @@ static void parsePrecedence(Precedence precedence) {
 }
 
 static void expression() {
+    
+    // printf("========expression========\n");
+
     parsePrecedence(PREC_ASSIGNMENT);
+}
+
+// block -> "{" declaration* "}"
+static void block() {
+    // printf("========block========\n");
+
+    while(!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+        declaration();
+    }
+
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
 }
 
 
 // statement      → exprStmt
-//                  | printStmt ;
+//                  | printStmt 
+//                  | forStmt
+//                  | ifStmt
+//                  | whileStmt
+//                  | block ;
 static void statement() {
+    // printf("========statement========\n");
+
     if(match(TOKEN_PRINT)) {
         printStatement();
+    } else if(match(TOKEN_IF)) {
+        ifStatement();
+    } else if(match(TOKEN_FOR)) {
+        forStatement();
+    } else if(match(TOKEN_WHILE)) {
+        whileStatement();
+    } else if(match(TOKEN_LEFT_BRACE)) {
+
+        beginScope();
+        block();
+        endScope();
+    
     } else {
         expressionStatement();
     }
 }
 
+static void beginScope() {
+    printf("========beginScope========\n");
+
+    current_compiler->scope_depth++;
+}
+
+static void endScope() {
+    printf("========endScope========\n");
+
+    current_compiler->scope_depth--;
+
+    // because local variables are on top of stack, they need
+    // to be removed when going out of scope.
+    while(current_compiler->local_count > 0 && 
+            current_compiler->locals[current_compiler->local_count - 1].depth > current_compiler->scope_depth) {
+
+                emitByte(OP_POP);
+                current_compiler->local_count--;
+
+    } 
+}
+
+
+static void ifStatement() {
+    // printf("========ifStatement========\n");
+
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+    expression();
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+    // currently, stack will have result of condition expression.
+    // on seeing OP_JUMP_IF_FALSE, it checks the result and if false,
+    // it jumps N bytes depending on parameter passed along with OP_JUMP_IF_FALSE 
+    // which is put in chunk by patchJump(). then_jump is index where offset needs to be stored.
+    // patchJump(), after parsing then branch, updates offset at this index in bytecode.
+    int then_jump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);   // pops condition output from stack if true.
+    statement();
+    
+
+    int else_jump = emitJump(OP_JUMP);
+
+    patchJump(then_jump);
+    emitByte(OP_POP);   // pops condition output from stack if false.
+
+    if(match(TOKEN_ELSE))   statement();
+    patchJump(else_jump);
+}
+
+
+static void whileStatement() {
+    // printf("========whileStatement========\n");
+
+    int loop_start = currentChunk()->count;
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+    expression();
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+    int exit_jump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+    statement();
+
+    emitLoop(loop_start);
+
+    patchJump(exit_jump);
+    emitByte(OP_POP);
+}
+
+static void forStatement() {
+    printf("========forStatement========\n");
+
+    beginScope(); // for any new variables being declared.
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+    
+    if(match(TOKEN_SEMICOLON)) {
+        // No initializer
+    } else if(match(TOKEN_VAR)) {
+        varDeclaration();
+    } else {
+        expressionStatement();
+    }
+
+    int loop_start = currentChunk()->count;
+    int exit_jump = -1;
+    if(!match(TOKEN_SEMICOLON)) {
+        expression();
+        consume(TOKEN_SEMICOLON, "Expect ';' after loop condition.");
+
+        // jump out of loop if condition is false
+        exit_jump = emitJump(OP_JUMP_IF_FALSE);
+        emitByte(OP_POP);   // popping condition from stack
+    }
+    // consume(TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
+
+    if(!match(TOKEN_RIGHT_PAREN)) {
+        int body_jump = emitJump(OP_JUMP);
+        int increment_start = currentChunk()->count;
+
+        expression();
+        emitByte(OP_POP);
+        consume(TOKEN_RIGHT_PAREN, "Expect ')' after for classes.");
+
+        emitLoop(loop_start);
+        loop_start = increment_start;
+        patchJump(body_jump);
+    }
+
+    statement();
+    emitLoop(loop_start);
+
+    if(exit_jump != -1) {
+        patchJump(exit_jump); 
+        emitByte(OP_POP);   // popping condition.
+    }
+
+    endScope();     
+}
+
+static int emitJump(uint8_t instruction) {
+    // printf("========emitJump========\n");
+
+    emitByte(instruction);
+    // offset takes two bytes. So, we can jump 2^16 = 65,536 bytes.
+    emitByte(0xff);     // offset placeholder
+    emitByte(0xff);     // offset placeholder
+    return currentChunk()->count - 2;
+}
+
+static void emitLoop(int loop_start) {
+    // printf("========emitLoop========\n");
+
+    emitByte(OP_LOOP);
+
+    int offset = currentChunk()->count - loop_start + 2;
+    if(offset > UINT16_MAX) error("Loop body too large");
+
+    emitByte((offset >> 8) & 0xff);
+    emitByte(offset & 0xff);
+}
+
+static void patchJump(int offset_index) {
+    // printf("========patchJump========\n");
+
+    // -2 to adjust for the bytecode for the jump offset itself.
+    // if OP_JUMP_IF_FALSE is at 4, then offset will be in 5,6.
+    // if 'then branch' ends at 9, then, the value to be store in 
+    // offset should 3. we get by 9 - 4 - 2.
+    // 9 = current position
+    // 4 = byte where JUMP is present.
+    // 2 = space being taken by offset which is not part of then code.
+    int jump = currentChunk()->count - offset_index - 2;
+
+    if(jump > UINT16_MAX) {
+        error("Too much code to jump over.");
+    }
+
+    currentChunk()->code[offset_index] = (jump>>8) & 0xff;
+    currentChunk()->code[offset_index + 1] = jump & 0xff;
+}
+
+static void and_(bool can_assign) {
+    // printf("========and_========\n");
+
+    int end_jump = emitJump(OP_JUMP_IF_FALSE);
+
+    emitByte(OP_POP);
+    parsePrecedence(PREC_AND);
+
+    patchJump(end_jump);
+}
+
+static void or_(bool can_assign) {
+    // printf("========or_========\n");
+
+    int else_jump = emitJump(OP_JUMP_IF_FALSE);
+    int end_jump = emitJump(OP_JUMP);
+
+    patchJump(else_jump);
+    emitByte(OP_POP);
+
+    parsePrecedence(PREC_OR);
+    patchJump(end_jump);
+}
 
 // declaration    → varDecl
 //                  | statement ;
 static void declaration() {
+    // printf("========declaration========\n");
+
     if(match(TOKEN_VAR)) {
         varDeclaration();
     } else {
@@ -333,6 +632,8 @@ static void declaration() {
 }
 
 static void varDeclaration() {
+    // printf("========varDeclaration========\n");
+
     uint8_t global = parseVariable("Expect variable name.");
 
     if(match(TOKEN_EQUAL)) {
@@ -347,19 +648,101 @@ static void varDeclaration() {
 }
 
 static uint8_t parseVariable(const char* error_message) {
+    // printf("========parseVariable========\n");
+
     consume(TOKEN_IDENTIFIER, error_message);
+
+    declareVariable();
+
+    // if scope deth is greater than zero, then it is local
+    // variable. We dont need to add it to constants
+    // in Chunk. We have a separate store for local
+    // variables.
+    if(current_compiler->scope_depth > 0) return 0;
     return identifierConstant(&parser.previous);
 }
 
 static uint8_t identifierConstant(Token* identifier_name) {
+    // printf("========identifierConstant========\n");
+
     return makeConstant(OBJ_VAL(copyString(identifier_name->start, identifier_name->length)));
 }
 
+static void addLocal(Token name) {
+    // printf("========addLocal========\n");
+
+    if(current_compiler->local_count == UINT8_COUNT) {
+        error("Too many local variables in function.");
+        return;
+    }
+
+    Local* local = &current_compiler->locals[current_compiler->local_count++];
+    local->name = name;
+    // local->depth = current_compiler->scope_depth;
+    // will be set when being initialized[in defineVariable()].
+    local->depth = -1;
+}
+
+static void markInitialized() {
+    // printf("========markInitialized========\n");
+
+    current_compiler->locals[current_compiler->local_count - 1].depth = current_compiler->scope_depth;
+}
+
+
+static bool identifiersEqual(Token* a, Token* b) {
+    // printf("========identifiersEqual========\n");
+
+    if(a->length != b->length) return false;
+    return memcmp(a->start, b->start, a->length) == 0;
+}
+
+static void declareVariable() {
+    // printf("========declareVariable========\n");
+
+    // return if global scope since it will be taken care of 
+    // by identifierConstant() which adds value to constants pool
+    if(current_compiler->scope_depth == 0) return;
+
+    Token* name = &parser.previous;
+
+    // detecting redeclaration in same scope.
+    for(int i=current_compiler->local_count - 1; i>=0; i--) {
+        Local* local = &current_compiler->locals[i];
+
+        // if not finding variable in current scope, we can
+        // exit as it is not redeclaration.
+        if(local->depth != -1 && local->depth < current_compiler->scope_depth) {
+            break;
+        }
+
+        // checking if variable name matches with existing ones
+        // in current scope.
+        if(identifiersEqual(name, &local->name)) {
+            error("Already variable with this name in this scope.");
+        }
+    }
+
+    // method where compiler records the existence of 
+    // local variable.
+    addLocal(*name);
+}
+
 static void defineVariable(uint8_t global) {
+    // printf("========defineVariable========\n");
+
+    // if in local scope, then it wont be added coz
+    // it is not present in constants pool. so, the 'global'
+    // value is almost useless. The local value is right
+    // on top of the stack since it is just declared.
+    if(current_compiler->scope_depth > 0)
+        return;
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
 static void printStatement() {
+    // printf("========printStatement========\n");
+
     // evaluates and puts the value on stack before OP_PRINT
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after value.");
@@ -367,27 +750,70 @@ static void printStatement() {
 }
 
 static void expressionStatement() {
+    // printf("========expressionStatement========\n");
+
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
     emitByte(OP_POP);
 }
 
 static void variable(bool can_assign) {
+    printf("========variable========\n");
+
     namedVariable(parser.previous, can_assign);
 }
 
 static void namedVariable(Token name, bool can_assign) {
-    uint8_t arg = identifierConstant(&name);
+    printf("========namedVariable========\n");
 
+    uint8_t get_op, set_op;
+
+    // check if local scope and if variable is in local scope.
+    int arg = resolveLocal(current_compiler, &name);
+    if(arg != -1) {
+        get_op = OP_GET_LOCAL;
+        set_op = OP_SET_LOCAL;
+    } else {
+
+        // it is a global varibale. Put it in constant pool.
+        arg = identifierConstant(&name);
+        get_op = OP_GET_GLOBAL;
+        set_op = OP_SET_GLOBAL;
+    }
+
+    // if being assigned something, set it.
+    // else, get it.
     if(can_assign && match(TOKEN_EQUAL)) {
         expression();
-        emitBytes(OP_SET_GLOBAL, arg);
+        emitBytes(set_op, (uint8_t)arg);
     } else {
-        emitBytes(OP_GET_GLOBAL, arg);
+        emitBytes(get_op, (uint8_t)arg);
     }
 }
 
+int resolveLocal(Compiler* compiler, Token* name) {
+    printf("========resolveLocal========\n");
+
+
+    for(int i=compiler->local_count-1; i>=0; i--) {
+        Local* local = &compiler->locals[i];
+        if(identifiersEqual(name, &local->name)) {
+
+            // handles cases like 'var a = a;'
+            if(local->depth == -1) {
+                error("Can't read local variable in its own initializer.");
+            }
+
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 static void synchronize() {
+    // printf("========synchronize========\n");
+
     parser.panicMode = false;
 
     while(parser.current.type != TOKEN_EOF) {
@@ -412,7 +838,12 @@ static void synchronize() {
 }
 
 bool compile(const char* source, Chunk* chunk) {
+    // printf("========compile========\n");
+
     initScanner(source);
+
+    Compiler compiler;
+    initCompiler(&compiler);
 
     compiling_chunk = chunk;
 
