@@ -47,7 +47,16 @@ typedef struct {
     int depth;
 } Local;
 
-typedef struct {
+typedef enum {
+    TYPE_FUNCTION,
+    TYPE_SCRIPT
+} FunctionType;
+
+typedef struct Compiler {
+    struct Compiler* enclosing;
+    ObjFunction* function;
+    FunctionType type;
+
     Local locals[UINT8_COUNT];
     int local_count;    // number of local variables in the scope.
     int scope_depth;    // depth of scope.
@@ -78,6 +87,7 @@ static void namedVariable(Token name, bool can_assign);
 static void varDeclaration();
 static void printStatement();
 static void whileStatement();
+static void returnStatement();
 static void ifStatement();
 static void forStatement();
 static void expressionStatement();
@@ -93,6 +103,11 @@ static void patchJump(int offset);
 static void emitLoop(int loop_start);
 static void and_(bool can_assign);
 static void or_(bool can_assign);
+static void function();
+static void funDeclaration();
+static void markInitialized();
+static void call(bool can_assign);
+static uint8_t argumentList();
 
 //  token                   = {fn to compile prefix expr starting with token of this type,
 //                             fn to compile an infix expr whose left operand is followed by
@@ -100,7 +115,7 @@ static void or_(bool can_assign);
 //                             precedence of an infix expr that uses this token as an operator};
 // int a[] = { [0]=1, [1]=2}; is C99 syntax
 ParseRule rules[] = {
-    [TOKEN_LEFT_PAREN]      = {grouping,    NULL,   PREC_NONE},
+    [TOKEN_LEFT_PAREN]      = {grouping,    call,   PREC_CALL},
     [TOKEN_RIGHT_PAREN]     = {NULL,        NULL,   PREC_NONE},
     [TOKEN_LEFT_BRACE]      = {NULL,        NULL,   PREC_NONE},
     [TOKEN_RIGHT_BRACE]     = {NULL,        NULL,   PREC_NONE},
@@ -143,7 +158,7 @@ ParseRule rules[] = {
 };
 
 static Chunk* currentChunk() {
-    return compiling_chunk;
+    return &current_compiler->function->chunk;
 }
 
 static void errorAt(Token* token, const char* message) {
@@ -244,6 +259,7 @@ static void emitBytes(uint8_t byte1, uint8_t byte2) {
 static void emitReturn() {
     // printf("========emitReturn========\n");
 
+    emitByte(OP_NIL);
     emitByte(OP_RETURN);
 }
 
@@ -253,24 +269,41 @@ static void emitConstant(Value value) {
     emitBytes(OP_CONSTANT, makeConstant(value));
 }
 
-static void initCompiler(Compiler* compiler) {
+static void initCompiler(Compiler* compiler, FunctionType type) {
     // printf("========initCompiler========\n");
 
+    compiler->enclosing = current_compiler;
+    compiler->function = NULL;
+    compiler->type = type;
     compiler->local_count = 0;
     compiler->scope_depth = 0;
+    compiler->function = newFunction(); // should be this way. GC-paranoia.
     current_compiler = compiler;
+    if(type != TYPE_SCRIPT) {
+        current_compiler->function->name = copyString(parser.previous.start, parser.previous.length);
+    }
+
+    // making first element in stack empty. 
+    Local* local = &current_compiler->locals[current_compiler->local_count++];
+    local->depth = 0;
+    local->name.start = "";
+    local->name.length = 0;
 }
 
-static void endCompiler() {
+static ObjFunction* endCompiler() {
     // printf("========endCompiler========\n");
 
     emitReturn();
+    ObjFunction* function = current_compiler->function;
 
 #ifdef VDEBUG_PRINT_CODE
     if(!parser.hadError) {
-        disassembleChunk(currentChunk(), "code");
+        disassembleChunk(currentChunk(), function->name!=NULL?function->name->chars:"<script>");
     }
 #endif
+
+    current_compiler = current_compiler->enclosing;
+    return function;
 }
 
 static void number(bool can_assign) {
@@ -418,6 +451,8 @@ static void statement() {
         printStatement();
     } else if(match(TOKEN_IF)) {
         ifStatement();
+    } else if(match(TOKEN_RETURN)) {
+        returnStatement();
     } else if(match(TOKEN_FOR)) {
         forStatement();
     } else if(match(TOKEN_WHILE)) {
@@ -434,13 +469,13 @@ static void statement() {
 }
 
 static void beginScope() {
-    printf("========beginScope========\n");
+    // printf("========beginScope========\n");
 
     current_compiler->scope_depth++;
 }
 
 static void endScope() {
-    printf("========endScope========\n");
+    // printf("========endScope========\n");
 
     current_compiler->scope_depth--;
 
@@ -502,7 +537,7 @@ static void whileStatement() {
 }
 
 static void forStatement() {
-    printf("========forStatement========\n");
+    // printf("========forStatement========\n");
 
     beginScope(); // for any new variables being declared.
     consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
@@ -549,6 +584,19 @@ static void forStatement() {
     }
 
     endScope();     
+}
+
+static void returnStatement() {
+    if(current_compiler->type == TYPE_SCRIPT) {
+        error("Can't return from top-level code.");
+    }
+    if(match(TOKEN_SEMICOLON)) {
+        emitReturn();
+    } else {
+        expression();
+        consume(TOKEN_SEMICOLON, "Expect ';' after return value");
+        emitByte(OP_RETURN);
+    }
 }
 
 static int emitJump(uint8_t instruction) {
@@ -621,14 +669,72 @@ static void or_(bool can_assign) {
 //                  | statement ;
 static void declaration() {
     // printf("========declaration========\n");
-
-    if(match(TOKEN_VAR)) {
+    if(match(TOKEN_FUN)) {
+        funDeclaration();
+    } else if(match(TOKEN_VAR)) {
         varDeclaration();
     } else {
         statement();
     }
 
     if(parser.panicMode) synchronize();
+}
+
+static void funDeclaration() {
+    uint8_t global = parseVariable("Expect function name.");
+    markInitialized();
+    function(TYPE_FUNCTION);
+    defineVariable(global);
+}
+
+static void call(bool can_assign) {
+    uint8_t arg_count = argumentList();
+    emitBytes(OP_CALL, arg_count);
+}
+
+static uint8_t argumentList() {
+    uint8_t arg_count = 0;
+    if(!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            expression();
+            if(arg_count == 255) {
+                error("Can'thave more than 255 arguments.");
+            }
+            arg_count++;
+        }while(match(TOKEN_COMMA));
+    }
+
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+    return arg_count;
+}
+
+static void function(FunctionType type) {
+    Compiler compiler;
+    initCompiler(&compiler, type);
+    beginScope();
+
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+
+    if(!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            current_compiler->function->arity++;
+            if(current_compiler->function->arity > 255) {
+                error("Can't have more than 255 parameters.");
+            }
+
+            uint8_t constant = parseVariable("Expect parameter name.");
+            defineVariable(constant);
+
+        }while(match(TOKEN_COMMA));
+    }
+
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+    consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+
+    block();
+
+    ObjFunction* function = endCompiler();
+    emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
 }
 
 static void varDeclaration() {
@@ -686,6 +792,7 @@ static void addLocal(Token name) {
 static void markInitialized() {
     // printf("========markInitialized========\n");
 
+    if(current_compiler->scope_depth == 0) return;
     current_compiler->locals[current_compiler->local_count - 1].depth = current_compiler->scope_depth;
 }
 
@@ -758,13 +865,13 @@ static void expressionStatement() {
 }
 
 static void variable(bool can_assign) {
-    printf("========variable========\n");
+    // printf("========variable========\n");
 
     namedVariable(parser.previous, can_assign);
 }
 
 static void namedVariable(Token name, bool can_assign) {
-    printf("========namedVariable========\n");
+    // printf("========namedVariable========\n");
 
     uint8_t get_op, set_op;
 
@@ -792,7 +899,7 @@ static void namedVariable(Token name, bool can_assign) {
 }
 
 int resolveLocal(Compiler* compiler, Token* name) {
-    printf("========resolveLocal========\n");
+    // printf("========resolveLocal========\n");
 
 
     for(int i=compiler->local_count-1; i>=0; i--) {
@@ -837,15 +944,15 @@ static void synchronize() {
     }
 }
 
-bool compile(const char* source, Chunk* chunk) {
+ObjFunction* compile(const char* source) {
     // printf("========compile========\n");
 
     initScanner(source);
 
     Compiler compiler;
-    initCompiler(&compiler);
+    initCompiler(&compiler, TYPE_SCRIPT);
 
-    compiling_chunk = chunk;
+    // compiling_chunk = chunk;
 
     parser.hadError = false;
     parser.panicMode = false;
@@ -857,6 +964,6 @@ bool compile(const char* source, Chunk* chunk) {
         declaration();
     }
 
-    endCompiler();
-    return !parser.hadError;
+    ObjFunction* function = endCompiler();
+    return parser.hadError?NULL:function;
 }

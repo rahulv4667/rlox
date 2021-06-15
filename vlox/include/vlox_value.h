@@ -4,7 +4,6 @@
 #include "vlox_common.h"
 // #include "vlox_object.h"
 
-#define STACK_MAX 256
 
 typedef enum {
     VAL_BOOL,
@@ -49,7 +48,7 @@ void initValueArray(ValueArray* array);
 void writeValueArray(ValueArray* array, Value value);
 void freeValueArray(ValueArray* array);
 void printValue(Value value);
-void printObject(Value value);
+
 bool valuesEqual(Value a, Value b);
 
 

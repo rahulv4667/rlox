@@ -1,5 +1,8 @@
-var b = 0;
-print(b);
-for(var a = 0; a < 10; a = a + 1) {
-    print a;
+fun fib(n) {
+    if(n<2) return n;
+    return fib(n-2) + fib(n-1);
 }
+
+var start = clock();
+print fib(35);
+print clock() - start;
