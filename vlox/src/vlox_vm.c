@@ -71,6 +71,7 @@ static bool call(ObjFunction* function, int arg_count) {
     frame->function = function;
     frame->ip = function->chunk.code;
     frame->slots = vm.stackTop - arg_count - 1;
+    return true;
 }
 
 static bool callValue(Value callee, int arg_count) {
@@ -157,7 +158,8 @@ static InterpretResult run() {
     #define READ_CONSTANT() (frame->function->chunk.constants.values[READ_BYTE()])
     #define READ_STRING()   AS_STRING(READ_CONSTANT())
     #define READ_SHORT() \
-        (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
+        (frame->ip += 2, \
+         (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
     #define BINARY_OP(valueType, op) \
         do { \
             if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { \
@@ -341,11 +343,6 @@ InterpretResult interpret(const char* source) {
 
     push(OBJ_VAL(function));
     call(function, 0);
-    CallFrame* frame = &vm.frames[vm.frame_count++];
-
-    frame->function = function;
-    frame->ip = function->chunk.code;
-    frame->slots = vm.stack;
 
     return run();  
 }
