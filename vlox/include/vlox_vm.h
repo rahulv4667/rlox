@@ -32,6 +32,8 @@ typedef struct {
     Obj** gray_stack;
     size_t bytes_allocated; // total number of bytes of managed memory by VM
     size_t next_GC;         // threshold that triggers the next initialization
+
+    ObjString* init_string; // stores the value "init" for class consturctors.
 } VM;
 
 typedef enum {

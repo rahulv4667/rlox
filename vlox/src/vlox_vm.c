@@ -42,12 +42,16 @@ void initVM() {
     initTable(&vm.strings_pool);
     initTable(&vm.globals);
 
+    vm.init_string = NULL;  // required to avoid being removed by GC
+    vm.init_string = copyString("init", 4);
+
     defineNative("clock", clockNative);
 }
 
 void freeVM() {
     freeTable(&vm.strings_pool);
     freeTable(&vm.globals);
+    vm.init_string = NULL;
     freeObjects();
 }
 
@@ -105,7 +109,20 @@ static bool callValue(Value callee, int arg_count) {
             case OBJ_CLASS: {
                 ObjClass* klass = AS_CLASS(callee);
                 vm.stackTop[-arg_count - 1] = OBJ_VAL(newInstance(klass));
+                Value initializer;
+                if(tableGet(&klass->methods, vm.init_string, &initializer)) {
+                    return call(AS_CLOSURE(initializer), arg_count);
+                } else if(arg_count != 0) {
+                    // initializer is not there but arguments are being passed.
+                    runtimeError("Expected 0 arguments but got %d.", arg_count);
+                }
                 return true;
+            }
+
+            case OBJ_BOUND_METHOD: {
+                ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
+                vm.stackTop[-arg_count - 1] = bound->receiver;
+                return call(bound->method, arg_count);
             }
             
             default:
@@ -147,6 +164,54 @@ static void closeUpvalues(Value* last) {
         upvalue->location = &upvalue->closed;
         vm.open_upvalues = upvalue->next;
     }
+}
+
+static void defineMethod(ObjString* name) {
+    Value method = peek(0);
+    ObjClass* klass = AS_CLASS(peek(1));
+    tableSet(&klass->methods, name, method);
+    pop();
+}
+
+static bool bindMethod(ObjClass* klass, ObjString* name) {
+    Value method;
+    if(!tableGet(&klass->methods, name, &method)) {
+        runtimeError("Undefined property '%s'.", name->chars);
+        return false;
+    }
+
+    ObjBoundMethod* bound = newBoundMethod(peek(0), AS_CLOSURE(method));
+    pop();
+    push(OBJ_VAL(bound));
+    return true;
+}
+
+static bool invokeFromClass(ObjClass* klass, ObjString* name, int arg_count) {
+    Value method;
+    if(!tableGet(&klass->methods, name, &method)) {
+        runtimeError("Undefined property '%s'.", name->chars);
+        return false;
+    }
+    return call(AS_CLOSURE(method), arg_count);
+}
+
+static bool invoke(ObjString* name, int arg_count) {
+    Value receiver = peek(arg_count);
+
+    if(!IS_INSTANCE(receiver)) {
+        runtimeError("Only instances have methods.");
+        return false;
+    }
+
+    ObjInstance* instance = AS_INSTANCE(receiver);
+
+    Value value;
+    if(tableGet(&instance->fields, name, &value)) {
+        vm.stackTop[-arg_count - 1] = value;
+        return callValue(value, arg_count);
+    }
+
+    return invokeFromClass(instance->klass, name, arg_count);
 }
 
 static bool isFalsey(Value value) {
@@ -407,6 +472,11 @@ static InterpretResult run() {
                 break;
             }
 
+            case OP_METHOD: {
+                defineMethod(READ_STRING());
+                break;
+            }
+
             case OP_GET_PROPERTY: {
                 // top of stack is instance
                 if(!IS_INSTANCE(peek(0))) {
@@ -424,8 +494,10 @@ static InterpretResult run() {
                     break;
                 }
 
-                runtimeError("Undefined property '%s'.", name->chars);
-                return INTERPRET_RUNTIME_ERROR;
+                if(!bindMethod(instance->klass, name)) {
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                break;
             }
 
             case OP_SET_PROPERTY: {
@@ -439,6 +511,16 @@ static InterpretResult run() {
                 Value value = pop(); // removing actual value
                 pop();  // removing instance
                 push(value);    // pushing actual value back.
+                break;
+            }
+
+            case OP_INVOKE: {
+                ObjString* method = READ_STRING();
+                int arg_count = READ_BYTE();
+                if(!invoke(method, arg_count)) {
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                frame = &vm.frames[vm.frame_count - 1];
                 break;
             }
 
