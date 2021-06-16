@@ -1,9 +1,28 @@
 class Scone {
-  topping(first, second) {
-    print "scone with " + first + " and " + second;
+
+  init() {
+    print "Scone created";
+  }
+
+  sayHello() {
+    print "Scone hello";
+  }
+}
+
+class Derived < Scone {
+  init() {
+    // super.init();
+    print "Derived created";
+  }
+
+  sayHello() {
+    print "Derived hello";
   }
 }
 
 var scone = Scone();
-scone.topping("berries", "cream");
+scone.sayHello();
+
+var derived = Derived();
+derived.sayHello();
 
