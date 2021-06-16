@@ -8,6 +8,7 @@
 #include "vlox_scanner.h"
 #include "vlox_value.h"
 #include "vlox_object.h"
+#include "vlox_memory.h"
 
 #ifdef VDEBUG_PRINT_CODE
     #include "vlox_debug.h"
@@ -1026,4 +1027,12 @@ ObjFunction* compile(const char* source) {
 
     ObjFunction* function = endCompiler();
     return parser.hadError?NULL:function;
+}
+
+void markCompilerRoots() {
+    Compiler* compiler = current_compiler;
+    while(compiler != NULL) {
+        markObject((Obj*)compiler->function);
+        compiler = compiler->enclosing;
+    }
 }

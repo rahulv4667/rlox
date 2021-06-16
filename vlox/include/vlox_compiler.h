@@ -5,5 +5,6 @@
 #include "vlox_vm.h"
 
 ObjFunction* compile(const char* source);
+void markCompilerRoots();
 
 #endif // __VLOX_COMPILE_H

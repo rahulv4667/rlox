@@ -25,6 +25,13 @@ typedef struct {
     Table strings_pool;      // to store all unique strings.
     Table globals;          // to store all global variables.
     ObjUpvalue* open_upvalues;
+
+    // for garbage collection
+    int gray_count;
+    int gray_capacity;
+    Obj** gray_stack;
+    size_t bytes_allocated; // total number of bytes of managed memory by VM
+    size_t next_GC;         // threshold that triggers the next initialization
 } VM;
 
 typedef enum {
