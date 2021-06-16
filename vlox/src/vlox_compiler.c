@@ -45,12 +45,18 @@ typedef struct {
 typedef struct {
     Token name;
     int depth;
+    bool is_captured;
 } Local;
 
 typedef enum {
     TYPE_FUNCTION,
     TYPE_SCRIPT
 } FunctionType;
+
+typedef struct {
+    uint8_t index;
+    bool is_local;
+} Upvalue;
 
 typedef struct Compiler {
     struct Compiler* enclosing;
@@ -59,6 +65,7 @@ typedef struct Compiler {
 
     Local locals[UINT8_COUNT];
     int local_count;    // number of local variables in the scope.
+    Upvalue upvalues[UINT8_COUNT];
     int scope_depth;    // depth of scope.
 } Compiler;
 
@@ -108,6 +115,8 @@ static void funDeclaration();
 static void markInitialized();
 static void call(bool can_assign);
 static uint8_t argumentList();
+static int resolveUpvalue(Compiler* compiler, Token* name);
+static int addUpvalue(Compiler* compiler, uint8_t index, bool is_local);
 
 //  token                   = {fn to compile prefix expr starting with token of this type,
 //                             fn to compile an infix expr whose left operand is followed by
@@ -286,6 +295,7 @@ static void initCompiler(Compiler* compiler, FunctionType type) {
     // making first element in stack empty. 
     Local* local = &current_compiler->locals[current_compiler->local_count++];
     local->depth = 0;
+    local->is_captured = false;
     local->name.start = "";
     local->name.length = 0;
 }
@@ -484,7 +494,11 @@ static void endScope() {
     while(current_compiler->local_count > 0 && 
             current_compiler->locals[current_compiler->local_count - 1].depth > current_compiler->scope_depth) {
 
-                emitByte(OP_POP);
+                if(current_compiler->locals[current_compiler->local_count - 1].is_captured) {
+                    emitByte(OP_CLOSE_UPVALUE);
+                } else {
+                    emitByte(OP_POP);
+                }
                 current_compiler->local_count--;
 
     } 
@@ -734,7 +748,12 @@ static void function(FunctionType type) {
     block();
 
     ObjFunction* function = endCompiler();
-    emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
+    emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+
+    for(int i=0; i < function->upvalue_count; i++) {
+        emitByte(compiler.upvalues[i].is_local ? 1 : 0);
+        emitByte(compiler.upvalues[i].index);
+    }
 }
 
 static void varDeclaration() {
@@ -787,6 +806,7 @@ static void addLocal(Token name) {
     // local->depth = current_compiler->scope_depth;
     // will be set when being initialized[in defineVariable()].
     local->depth = -1;
+    local->is_captured = false;
 }
 
 static void markInitialized() {
@@ -880,6 +900,9 @@ static void namedVariable(Token name, bool can_assign) {
     if(arg != -1) {
         get_op = OP_GET_LOCAL;
         set_op = OP_SET_LOCAL;
+    } else if((arg = resolveUpvalue(current_compiler, &name)) != -1) {
+        get_op = OP_GET_UPVALUE;
+        set_op = OP_SET_UPVALUE;
     } else {
 
         // it is a global varibale. Put it in constant pool.
@@ -913,6 +936,43 @@ int resolveLocal(Compiler* compiler, Token* name) {
 
             return i;
         }
+    }
+
+    return -1;
+}
+
+static int addUpvalue(Compiler* compiler, uint8_t index, bool is_local) {
+    int upvalue_count = compiler->function->upvalue_count;
+
+    for(int i=0; i<upvalue_count; i++) {
+        Upvalue* upvalue = &compiler->upvalues[i];
+        if(upvalue->index == index && upvalue->is_local == is_local) {
+            return i;
+        } 
+    }
+
+    if(upvalue_count == UINT8_COUNT) {
+        error("Too many closure variables in function.");
+        return 0;
+    }
+
+    compiler->upvalues[upvalue_count].is_local = is_local;
+    compiler->upvalues[upvalue_count].index = index;
+    return compiler->function->upvalue_count++;
+}
+
+static int resolveUpvalue(Compiler* compiler, Token* name) {
+    if(compiler->enclosing == NULL) return -1;
+
+    int local = resolveLocal(compiler->enclosing, name);
+    if(local != -1) {
+        compiler->enclosing->locals[local].is_captured = true;
+        return addUpvalue(compiler, (uint8_t)local, true);
+    }
+
+    int upvalue = resolveUpvalue(compiler->enclosing, name);
+    if(upvalue != -1) {
+        return addUpvalue(compiler, (uint8_t)upvalue, false);
     }
 
     return -1;

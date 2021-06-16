@@ -10,7 +10,7 @@
 #define STACK_MAX (FRAMES_MAX * UINT8_COUNT)
 
 typedef struct {
-    ObjFunction* function;
+    ObjClosure* closure;
     uint8_t* ip;    // points to the next instruction to be executed after a function is called.
     Value* slots;   // points to the first slot given for function in stack
 } CallFrame;
@@ -24,6 +24,7 @@ typedef struct {
     Obj* objects;       // pointer to the head of all heap allocated objects linked list
     Table strings_pool;      // to store all unique strings.
     Table globals;          // to store all global variables.
+    ObjUpvalue* open_upvalues;
 } VM;
 
 typedef enum {
