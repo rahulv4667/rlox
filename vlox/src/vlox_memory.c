@@ -7,7 +7,7 @@
 
 #ifdef DEBUG_LOG_GC
 #include <stdio.h>
-#include "debug.h"
+#include "vlox_debug.h"
 #endif
 
 #define GC_HEAP_GROW_FACTOR 2
@@ -65,6 +65,18 @@ static void freeObject(Obj* object) {
 
         case OBJ_UPVALUE: {
             FREE(ObjUpvalue, object);
+            break;
+        }
+
+        case OBJ_CLASS: {
+            FREE(ObjClass, object);
+            break;
+        }
+
+        case OBJ_INSTANCE: {
+            ObjInstance* instance = (ObjInstance*)object;
+            freeTable(&instance->fields);
+            FREE(ObjInstance, object);
             break;
         }
 
@@ -169,6 +181,19 @@ static void blackenObject(Obj* object) {
             markValue(((ObjUpvalue*)object)->closed);
             break;
 
+        case OBJ_CLASS: {
+            ObjClass* klass = (ObjClass*)object;
+            markObject((Obj*)klass->name);
+            break;
+        }
+
+        case OBJ_INSTANCE: {
+            ObjInstance* instance = (ObjInstance*)object;
+            markObject((Obj*)instance->klass);
+            markTable(&instance->fields);
+            break;
+        }
+
         case OBJ_NATIVE:
         case OBJ_STRING:
             break;
@@ -210,7 +235,7 @@ static void sweep() {
 }
 
 
-void collectObjects() {
+void collectGarbage() {
     #ifdef DEBUG_LOG_GC
         printf("-- gc begin\n");
     #endif

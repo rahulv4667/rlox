@@ -2,6 +2,7 @@
 #define __VLOX_MEMORY_H
 
 #include "vlox_common.h"
+#include "vlox_object.h"
 
 #define ALLOCATE(type, count) (type*)reallocate(NULL, 0, sizeof(type) * count)
 

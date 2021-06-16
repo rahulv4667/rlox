@@ -100,6 +100,13 @@ static bool callValue(Value callee, int arg_count) {
             case OBJ_CLOSURE: {
                 return call(AS_CLOSURE(callee), arg_count);
             }
+
+            // considered a constructor call
+            case OBJ_CLASS: {
+                ObjClass* klass = AS_CLASS(callee);
+                vm.stackTop[-arg_count - 1] = OBJ_VAL(newInstance(klass));
+                return true;
+            }
             
             default:
                 break;
@@ -392,6 +399,46 @@ static InterpretResult run() {
             case OP_SET_UPVALUE: {
                 uint8_t slot = READ_BYTE();
                 *frame->closure->upvalues[slot]->location = peek(0);
+                break;
+            }
+
+            case OP_CLASS: {
+                push(OBJ_VAL(newClass(READ_STRING())));
+                break;
+            }
+
+            case OP_GET_PROPERTY: {
+                // top of stack is instance
+                if(!IS_INSTANCE(peek(0))) {
+                    runtimeError("Only instances have properties.");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                ObjInstance* instance = AS_INSTANCE(peek(0));
+                ObjString* name = READ_STRING();
+
+                Value value;
+                if(tableGet(&instance->fields, name, &value)) {
+                    pop();  // popping instance;
+                    push(value);
+                    break;
+                }
+
+                runtimeError("Undefined property '%s'.", name->chars);
+                return INTERPRET_RUNTIME_ERROR;
+            }
+
+            case OP_SET_PROPERTY: {
+                // top of stack if value to be set and then instance.
+                if(!IS_INSTANCE(peek(1))) {
+                    runtimeError("Only instance have fields.");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                ObjInstance* instance = AS_INSTANCE(peek(1));
+                tableSet(&instance->fields, READ_STRING(), peek(0));
+                Value value = pop(); // removing actual value
+                pop();  // removing instance
+                push(value);    // pushing actual value back.
                 break;
             }
 

@@ -99,6 +99,7 @@ static void returnStatement();
 static void ifStatement();
 static void forStatement();
 static void expressionStatement();
+static void classDeclaration();
 static void declareVariable();
 static void addLocal(Token name);
 static int resolveLocal(Compiler* compiler, Token* name);
@@ -118,6 +119,7 @@ static void call(bool can_assign);
 static uint8_t argumentList();
 static int resolveUpvalue(Compiler* compiler, Token* name);
 static int addUpvalue(Compiler* compiler, uint8_t index, bool is_local);
+static void dot(bool can_assign);
 
 //  token                   = {fn to compile prefix expr starting with token of this type,
 //                             fn to compile an infix expr whose left operand is followed by
@@ -130,7 +132,7 @@ ParseRule rules[] = {
     [TOKEN_LEFT_BRACE]      = {NULL,        NULL,   PREC_NONE},
     [TOKEN_RIGHT_BRACE]     = {NULL,        NULL,   PREC_NONE},
     [TOKEN_COMMA]           = {NULL,        NULL,   PREC_NONE},
-    [TOKEN_DOT]             = {NULL,        NULL,   PREC_NONE},
+    [TOKEN_DOT]             = {NULL,        dot,    PREC_CALL},
     [TOKEN_MINUS]           = {unary,       binary, PREC_TERM},
     [TOKEN_PLUS]            = {NULL,        binary, PREC_TERM},
     [TOKEN_SEMICOLON]       = {NULL,        NULL,   PREC_NONE},
@@ -684,7 +686,9 @@ static void or_(bool can_assign) {
 //                  | statement ;
 static void declaration() {
     // printf("========declaration========\n");
-    if(match(TOKEN_FUN)) {
+    if(match(TOKEN_CLASS)) {
+        classDeclaration();
+    } else if(match(TOKEN_FUN)) {
         funDeclaration();
     } else if(match(TOKEN_VAR)) {
         varDeclaration();
@@ -694,6 +698,32 @@ static void declaration() {
 
     if(parser.panicMode) synchronize();
 }
+
+
+static void dot(bool can_assign) {
+    consume(TOKEN_IDENTIFIER, "Expect property name after '.'");
+    uint8_t name = identifierConstant(&parser.previous);
+
+    if(can_assign && match(TOKEN_EQUAL)) {
+        expression();
+        emitBytes(OP_SET_PROPERTY, name);
+    } else {
+        emitBytes(OP_GET_PROPERTY, name);
+    }
+}
+
+static void classDeclaration() {
+    consume(TOKEN_IDENTIFIER, "Expect class name.");
+    uint8_t name_constant = identifierConstant(&parser.previous);
+    declareVariable();
+
+    emitBytes(OP_CLASS, name_constant);
+    defineVariable(name_constant);
+
+    consume(TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+}
+
 
 static void funDeclaration() {
     uint8_t global = parseVariable("Expect function name.");
